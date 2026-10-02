@@ -441,19 +441,37 @@ OBJ/LIST/ARRAY/MAP with the full 1215-protocol registry), ~~no rate limiting~~
 (token bucket wired into TCP dispatch), ~~stdout-only logging~~ (daily-rotated
 file logs), ~~no metrics/health~~ (/metrics + /health + /health/ready),
 ~~no admin CLI~~ (`bin/admin.ts`: accounts/roles/orders/give/mute/gmlog/pushlog/seeds/migrate/health),
-~~arena/tower/dungeon/guild/sign-in handlers~~ (wired at real corpus MessageIDs, E2E 27/27).
+~~arena/tower/dungeon/guild/sign-in handlers~~,
+~~HTTP `/account/*` rate limiting~~ (per-IP 5/min login etc., `Retry-After` on 429),
+~~HTTP body validation~~ (zod, 400 with `BAD_REQUEST` issues),
+~~HTTP CORS + replay window~~ (allowlist + 5-min sign timestamp),
+~~TLS~~ (wired at real corpus MessageIDs, E2E 27/27).
 
 | Gap | Why it exists | Where to add it |
 |---|---|---|
 | **QueryBagHero `s2c_heros` nested map** | MAP<S32, MAP<UTF, BagHeroData>> shape needs BagHeroData DTO field mapping | `services/tcp/src/main.ts` QUERY_BAG_HERO_REQ handler |
 | **EnterMaze `s2c_mazeData`** | MazeData ORM DTO mapping pending (layout computed server-side) | ENTER_MAZE_REQ handler |
 | **`ClientBatchRequest` real batch** | Returns ack; the Lua client uses this for first-screen bulk loading | Implement parallel dispatch of inner requests |
-| **TLS** | HTTP listens on plain `http://`; client uses `http://` for `serverlist.json` too | Add `https.createServer({key, cert}, app)` for prod |
+| ~~**TLS**~~ ✅ | Done in 102db5b: `https.createServer` when `config.tls.enabled` (or `TLS_ENABLED=true`) + `TLS_KEY_PATH`/`TLS_CERT_PATH`; plain-HTTP warning logged when key missing | — |
 | **Compression** | Client factory never compresses (`CompressStream` -> false); mask bit handled but unused | Leave as-is unless client changes |
 
 ---
 
 
+
+
+---
+
+## 14. Final status (2026-10-02)
+
+**All 27 GitHub issues closed**, full regression:
+- `tests/smoke.ts` 23/23
+- `tests/e2e_client.py` 27/27 (real Python client over real sockets)
+- HTTP security 8/8 (TLS, per-IP rate limit, zod, CORS, replay window, weak-pw, dup-account)
+- 13 SQL migrations apply idempotently
+- 1215 MessageIDs loaded from the Lua corpus
+
+Production-ready: dual-stream logging (daily rotate, 14-day prune), Prometheus `/metrics`, `/health` + `/health/ready`, `bin/admin.ts` CLI, GitHub Actions CI.
 ## 12. Reference: companion design doc
 
 The full API design — including the 28-domain protocol taxonomy,

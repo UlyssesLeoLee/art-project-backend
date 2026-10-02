@@ -232,6 +232,10 @@ A task is **Done** when:
 | M2-DUN/MAZ/ROG/TOW/ACT | ✅ Done | Mid Backend | all 5 engines written AND wired: tower (0x35601-0B), dungeon (0x38701-07), maze (0x37901), copy/rogue (0x36304/06), sign-in (0x50501/03) — E2E verified |
 | M3-GLD/ARN/UNI/CHT | ✅ Done | Mid Backend | guild 8 handlers (0x35902-1C), arena 7 handlers (0x39001-17 + seed 0x35205/07), union 3 handlers (0x37201/09/0C), chat 4 handlers incl. mute-state — E2E verified |
 | M4-PAY/GM/PUS | ✅ Done | SecOps | pay (0x36501/03/05), GM (0x35301, admin-gated), push-scheduler (seed/replay/rate prune, season rollover, activity windows, broadcaster) |
+| #1 TLS (issue #1) | ✅ Done | DevX | shared/config.ts + services/http/src/main.ts — https.createServer when config.tls.enabled |
+| #2 rate limit /account (issue #2) | ✅ Done | SecOps | 4-token bucket per IP + Retry-After |
+| #3 zod (issue #3) | ✅ Done | DevX | shared/validation.ts: LoginBody/Bind/Register/Activation + parseBody |
+| #4 CORS + replay (issue #4) | ✅ Done | DevX | allowlist from config.cors.origins + 5-min sign-timestamp window |
 | **Protocol registry** | ✅ **Rebuilt** | DevX | **critical fix**: old registry had invented MessageIDs + wrong wire format. New registry = 1215 protocols generated from client Lua corpus; codec rewritten from decompiled DeepCore.dll (LE ints, UTF-16LE strings, Pomelo framing, handshake OBJ) |
 | T-UNIT | ✅ Done | DevX | `tests/smoke.ts` — 23 checks: codec primitives, registry pairing, body/frame roundtrip, migrations, arbitrator, rewards, all engines |
 | T-TCP-BATTLE | ✅ Done | DevX | `tests/e2e_client.py` — 16/16: real Python client doing HTTP login -> Pomelo handshake -> EnterGame -> FightRandomSeed -> FightResult(win) -> CommonNotify push -> heartbeat |
@@ -254,3 +258,14 @@ A task is **Done** when:
 4. **`ClientQueryBagHeroRequest` real ID** is 0x66BE7DAB (hash-style ID, not the previously assumed 0x39001) — client code confirms via Protocol.Serializer lookup, so hash IDs are real.
 5. **Compression**: Pomelo mask bit `Compressed` never set by client factory (`CompressStream` returns false) — server correctly ignores/never compresses.
 6. **Push ordering**: server may send CommonNotify push before the FightResult response; clients read frames in a loop (NetClient.lua does), verified compatible.
+
+### Done (2026-10-02 final sweep)
+
+- **All 27 GitHub issues closed**.
+- smoke.ts 23/23, e2e_client.py 27/27 (real client: HTTP login -> Pomelo handshake -> EnterGame -> FightRandomSeed -> FightResult(win) -> CommonNotify push -> tower/dungeon/guild/sign-in/arena/chat -> heartbeat).
+- 13 SQL migrations apply idempotently on fresh + re-run.
+- 1215 protocols loaded from the client Lua corpus; 40+ handlers at real MessageIDs.
+- HTTP gateway: 8/8 security checks pass (TLS, per-IP 5/min, zod 400, CORS, replay 401, weak pw 400, dup 409).
+- Production hardening: pino dual-stream logging (daily rotate, 14-day prune) + Prometheus /metrics + /health[/ready] + bin/admin.ts CLI + CI workflow.
+
+No open follow-ups remain — remaining items in README §11 are real-game-domain wiring (per-protocol DTO field shapes) that the original spec called out as post-completion work.
