@@ -1,0 +1,4 @@
+{
+  "words": ["badword1", "badword2", "fuck", "shit"],
+  "_comment": "Edit and save — service hot-reloads every 30s. Add CN/JP/KR terms as needed. Keep this list lowercase for case-insensitive matching."
+}
