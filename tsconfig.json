@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "outDir": "./dist", "rootDir": "./",
+    "strict": true, "esModuleInterop": true, "skipLibCheck": true,
+    "experimentalDecorators": true, "emitDecoratorMetadata": true,
+    "resolveJsonModule": true, "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".", "paths": { "@shared/*": ["shared/*"] }
+  },
+  "include": ["services/**/*.ts", "shared/**/*.ts", "db/**/*.ts", "tests/**/*.ts"]
+}

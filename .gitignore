@@ -1,0 +1,9 @@
+node_modules/
+data/
+logs/
+*.log
+package-lock.json
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
