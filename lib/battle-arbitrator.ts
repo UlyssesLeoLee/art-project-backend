@@ -1,52 +1,52 @@
 // RandomSeed + power-snapshot + Replay validator for the Unity client-authoritative battle system.
-// The client simulates battles locally using a server-issued RandomSeed and reports results back.
-// This module enforces:
-//   1. seed TTL (5 minutes)
-//   2. roleUuid binding (no replay-attack across players)
-//   3. power drift check (5% max)
-//   4. replay requirement on arena modes (mod 11..13)
-//
-// All state is in-memory. For prod-grade, persist to battle_seeds table (DB-002 migration).
+// Persists to battle_seeds (DB-003) and battle_replays (DB-004).
 
 import { randomUUID, randomInt } from 'node:crypto'
+import type { DatabaseSync } from 'node:sqlite'
 
 const SEED_TTL_SEC = 300
+const POWER_DRIFT_MAX = 0.05
 
-interface SeedRecord {
+interface SeedRow {
   uuid: string
-  roleUuid: string
-  fightMod: number
-  stageId: number
-  randomSeed: number
-  difficultyRank: number
-  needReplay: 0 | 1
-  powerSnapshot: number
-  createdAt: number
+  role_uuid: string
+  fight_mod: number
+  stage_id: number
+  random_seed: number
+  difficulty_rank: number
+  need_replay: 0 | 1
+  power_snapshot: number
+  needs_replay: 0 | 1
+  update_fight_mod: number
+  update_stage_id: number
+  stage_dynamic_difficulty: number
+  battle_check_realpwoer: 0 | 1
+  created_at: number
+  expires_at: number
 }
 
-const seeds = new Map<string, SeedRecord>()
+export interface SeedResponse {
+  s2c_randomUuid: string
+  s2c_updateFightMod: number
+  s2c_updateStageId: number
+  s2c_needFightDamage: 0 | 1
+  s2c_needFightReplay: 0 | 1
+  s2c_randomSeed: number
+  s2c_difficultyRank: number
+  s2c_stage_dynamic_difficulty: number
+  s2c_battle_check_realpwoer: 0 | 1
+}
 
-// Periodic prune of expired seeds
-setInterval(() => {
-  const now = Math.floor(Date.now() / 1000)
-  for (const [k, v] of seeds) {
-    if (now - v.createdAt > SEED_TTL_SEC) seeds.delete(k)
-  }
-}, 60_000).unref()
-
-export function IssueSeed(roleUuid: string, fightMod: number, stageId: number, currentPower: number) {
+export function IssueSeed(db: DatabaseSync, roleUuid: string, fightMod: number, stageId: number, currentPower: number): SeedResponse {
   const uuid = randomUUID()
   const randomSeed = randomInt(0, 0x7FFFFFFF)
   const difficultyRank = computeDifficultyRank(currentPower, fightMod, stageId)
-  // arena modes (FightType_ArenaValor=11, FightType_ArenaHighend=12, FightType_ArenaPinnacle=13)
-  const needReplay = (fightMod >= 11 && fightMod <= 13) ? 1 : 0
-  const rec: SeedRecord = {
-    uuid, roleUuid, fightMod, stageId,
-    randomSeed, difficultyRank, needReplay,
-    powerSnapshot: currentPower,
-    createdAt: Math.floor(Date.now() / 1000),
-  }
-  seeds.set(uuid, rec)
+  const needReplay = (fightMod >= 11 && fightMod <= 13) ? 1 as const : 0 as const
+  const now = Math.floor(Date.now() / 1000)
+  const expires = now + SEED_TTL_SEC
+  db.prepare(`INSERT INTO battle_seeds(uuid, role_uuid, fight_mod, stage_id, random_seed, difficulty_rank, need_replay, power_snapshot, needs_replay, update_fight_mod, update_stage_id, stage_dynamic_difficulty, battle_check_realpwoer, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    uuid, roleUuid, fightMod, stageId, randomSeed, difficultyRank, needReplay, currentPower,
+    needReplay, fightMod, stageId, difficultyRank, currentPower > 0 ? 1 : 0, now, expires)
   return {
     s2c_randomUuid: uuid,
     s2c_updateFightMod: fightMod,
@@ -60,32 +60,37 @@ export function IssueSeed(roleUuid: string, fightMod: number, stageId: number, c
   }
 }
 
-export interface SettleResult {
+export interface SettleResultResp {
   ok: boolean
   reason?: string
   rewards?: Array<{ type: string; id?: number; qty: number }>
 }
 
-export function SettleResult(roleUuid: string, randomUuid: string, currentPower: number, replayLog?: string): SettleResult {
-  const rec = seeds.get(randomUuid)
-  if (!rec) return { ok: false, reason: 'INVALID_UUID' }
-  if (rec.roleUuid !== roleUuid) return { ok: false, reason: 'UUID_MISMATCH' }
-  if (Math.floor(Date.now() / 1000) - rec.createdAt > SEED_TTL_SEC) {
-    seeds.delete(randomUuid)
+export function resolveBot(db: DatabaseSync, roleUuid: string, randomUuid: string, currentPower: number, replayLog?: string, replayHash?: string): SettleResultResp {
+  const row = db.prepare(`SELECT * FROM battle_seeds WHERE uuid = ?`).get(randomUuid) as SeedRow | undefined
+  if (!row) return { ok: false, reason: 'INVALID_UUID' }
+  if (row.role_uuid !== roleUuid) return { ok: false, reason: 'UUID_MISMATCH' }
+  const now = Math.floor(Date.now() / 1000)
+  if (now > row.expires_at) {
+    db.prepare(`DELETE FROM battle_seeds WHERE uuid = ?`).run(randomUuid)
     return { ok: false, reason: 'SEED_EXPIRED' }
   }
-  if (rec.powerSnapshot > 0 && currentPower > 0) {
-    const drift = Math.abs(currentPower - rec.powerSnapshot) / Math.max(rec.powerSnapshot, 1)
-    if (drift > 0.05) {
+  if (row.power_snapshot > 0 && currentPower > 0) {
+    const drift = Math.abs(currentPower - row.power_snapshot) / Math.max(row.power_snapshot, 1)
+    if (drift > POWER_DRIFT_MAX) {
       console.warn(`[cheat-detect] roleUuid=${roleUuid} power drift=${drift.toFixed(4)}`)
       return { ok: false, reason: 'POWER_DRIFT' }
     }
   }
-  if (rec.needReplay === 1 && !replayLog) {
+  if (row.need_replay === 1 && !replayLog) {
     return { ok: false, reason: 'REPLAY_REQUIRED' }
   }
-  const rewards = computeRewards(rec.fightMod, rec.stageId)
-  seeds.delete(randomUuid)
+  if (replayLog && replayHash) {
+    db.prepare(`INSERT INTO battle_replays(uuid, role_uuid, replay_json, replay_hash, expires_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(randomUUID(), roleUuid, replayLog, replayHash, now + 7 * 24 * 3600)
+  }
+  const rewards = computeRewards(db, row.fight_mod, row.stage_id)
+  db.prepare(`DELETE FROM battle_seeds WHERE uuid = ?`).run(randomUuid)
   return { ok: true, rewards }
 }
 
@@ -98,12 +103,27 @@ function computeDifficultyRank(power: number, mod: number, stageId: number): num
   return 1
 }
 
-function computeRewards(fightMod: number, stageId: number) {
-  return [
-    { type: 'gold', qty: stageId * 10 },
-    { type: 'exp', qty: stageId * 5 },
-  ]
+function computeRewards(db: DatabaseSync, fightMod: number, stageId: number): Array<{ type: string; id?: number; qty: number }> {
+  const rows = db.prepare(`SELECT item_id, weight, min_qty, max_qty FROM drop_tables WHERE stage_id = ?`).all(stageId) as Array<{ item_id: number; weight: number; min_qty: number; max_qty: number }>
+  const rewards: Array<{ type: string; id?: number; qty: number }> = []
+  if (rows.length === 0) {
+    rewards.push({ type: 'gold', qty: stageId * 10 })
+    rewards.push({ type: 'exp', qty: stageId * 5 })
+    return rewards
+  }
+  const total = rows.reduce((s, r) => s + r.weight, 0)
+  let pick = randomInt(0, total)
+  for (const r of rows) {
+    pick -= r.weight
+    if (pick <= 0) {
+      const qty = r.min_qty + randomInt(0, Math.max(1, r.max_qty - r.min_qty + 1))
+      rewards.push({ type: 'item', id: r.item_id, qty })
+      break
+    }
+  }
+  return rewards
 }
 
-// Test hook
-export function _seedCount() { return seeds.size }
+export function _seedCount(db: DatabaseSync): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM battle_seeds`).get() as any).n
+}

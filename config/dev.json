@@ -1,0 +1,23 @@
+{
+  "env": "dev",
+  "http": { "port": 8080, "host": "0.0.0.0" },
+  "tcp": { "port": 19821, "host": "0.0.0.0" },
+  "db": { "path": "./data/game.db" },
+  "secrets": {
+    "secretKey": "${SECRET_KEY:-3dbf6b137a80d10953507929a0216d8b}",
+    "jwtSecret": "${JWT_SECRET:-dev-jwt-secret-change-me}"
+  },
+  "game": {
+    "serverId": "s10001",
+    "cdnUrl": "http://127.0.0.1:8081",
+    "heartbeatMs": 15000,
+    "battleRecordUrlPrefix": ""
+  },
+  "pay": {
+    "notifyUrl": "",
+    "quickAppKey": "",
+    "tianjiAppKey": "",
+    "ymnAppKey": ""
+  },
+  "log": { "level": "info", "dir": "./logs", "maxFiles": 14 }
+}

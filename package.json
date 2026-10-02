@@ -1,5 +1,6 @@
 {
   "name": "art-project-backend",
+  "type": "module",
   "version": "0.1.0",
   "private": true,
   "description": "Backend for art-project-client (Unity card RPG)",
@@ -8,15 +9,16 @@
     "shared/*"
   ],
   "scripts": {
-    "build:proto": "node scripts/gen-proto.mjs",
+    "build:proto": "python scripts/gen_registry.py shared/proto/protocols.json && python scripts/gen_protocol_doc.py",
     "start:http": "node --enable-source-maps services/http/dist/main.js",
     "start:tcp": "node --enable-source-maps services/tcp/dist/main.js",
     "dev:http": "tsx watch services/http/src/main.ts",
     "dev:tcp": "tsx watch services/tcp/src/main.ts",
-    "test": "node --test --import tsx tests/**/*.test.ts",
+    "test": "node --import tsx tests/smoke.ts",
     "lint": "eslint . --ext .ts",
     "db:migrate": "node --import tsx db/migrations/run.ts",
-    "db:seed": "node --import tsx db/seeds/run.ts"
+    "test:e2e": "python tests/e2e_client.py",
+    "db:seed": "node --import tsx db/seeds/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",

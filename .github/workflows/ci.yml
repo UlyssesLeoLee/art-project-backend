@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Regenerate protocol registry (drift check)
+        run: |
+          if [ -d ../art-project-client ]; then
+            python3 scripts/gen_registry.py /tmp/protocols.check.json
+            if ! diff -q shared/proto/protocols.json /tmp/protocols.check.json; then
+              echo "::error::protocols.json is stale — re-run scripts/gen_registry.py and commit"
+              exit 1
+            fi
+          else
+            echo "client corpus not available in CI; skipping drift check"
+          fi
+
+      - name: Unit smoke tests
+        run: node --import tsx tests/smoke.ts
+        env:
+          DB_PATH: ':memory:'
+
+      - name: Boot servers + E2E
+        run: |
+          node --import tsx services/http/src/main.ts &
+          HTTP_PID=$!
+          node --import tsx services/tcp/src/main.ts &
+          TCP_PID=$!
+          for i in $(seq 1 40); do
+            if (echo > /dev/tcp/127.0.0.1/8080) 2>/dev/null && (echo > /dev/tcp/127.0.0.1/19821) 2>/dev/null; then break; fi
+            sleep 0.5
+          done
+          python3 tests/e2e_client.py
+          RC=$?
+          kill $HTTP_PID $TCP_PID 2>/dev/null || true
+          exit $RC
+        env:
+          DB_PATH: ./data/ci.db
+          APP_ENV: dev
+
+      - name: Health + metrics check
+        run: |
+          node --import tsx services/http/src/main.ts &
+          HTTP_PID=$!
+          sleep 2
+          curl -fsS http://127.0.0.1:8080/health
+          curl -fsS http://127.0.0.1:8080/metrics | head -5
+          kill $HTTP_PID 2>/dev/null || true
+        env:
+          DB_PATH: ./data/ci2.db
+          APP_ENV: dev

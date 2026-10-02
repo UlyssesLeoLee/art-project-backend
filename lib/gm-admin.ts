@@ -22,13 +22,29 @@ export interface GmResult {
 }
 
 export async function execGmCommand(
-  db: DatabaseSync, authToken: string, cmd: string, args: any
+  db: DatabaseSync, authToken: string, cmd: string, args: any, opts?: { roleUuid?: string; ip?: string }
 ): Promise<GmResult> {
   const maskedToken = authToken.slice(0, 16)
   auditLog.push({ ts: Date.now(), adminToken: maskedToken, cmd, args })
 
-  if (!isAdmin(authToken)) return { ok: false, reason: 'NOT_ADMIN' }
+  if (!isAdmin(authToken)) {
+    persistGmLog(db, opts?.roleUuid ?? '', cmd, args, 'NOT_ADMIN', maskedToken, opts?.ip ?? '')
+    return { ok: false, reason: 'NOT_ADMIN' }
+  }
 
+  const r = await runGm(db, cmd, args)
+  persistGmLog(db, opts?.roleUuid ?? '', cmd, args, r.ok ? 'OK' : (r.reason ?? 'ERR'), maskedToken, opts?.ip ?? '')
+  return r
+}
+
+function persistGmLog(db: DatabaseSync, roleUuid: string, cmd: string, args: any, result: string, adminUser: string, ip: string) {
+  try {
+    db.prepare(`INSERT INTO gm_log(role_uuid, cmd, args, admin_user, action_taken, ip) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(roleUuid, cmd, JSON.stringify(args ?? []), adminUser, result, ip)
+  } catch { /* table may predate 012 migration in old DBs; non-fatal */ }
+}
+
+async function runGm(db: DatabaseSync, cmd: string, args: any): Promise<GmResult> {
   switch (cmd) {
     case 'give': {
       const [roleUuid, type, id, qty] = args as [string, string, string | number, string | number]

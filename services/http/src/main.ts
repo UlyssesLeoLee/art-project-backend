@@ -3,15 +3,15 @@ import express from 'express'
 import jwt from 'jsonwebtoken'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { pino } from 'pino'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { runMigrations } from '../../../db/migrations/run.js'
+import { config } from '../../../shared/config.js'
+import { log, health, liveness, readiness, renderMetrics, httpRequests } from '../../../shared/obs.js'
 
-const log = pino()
-const SECRET_KEY = process.env.SECRET_KEY || '3dbf6b137a80d10953507929a0216d8b'
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-me'
-const DB_PATH = process.env.DB_PATH || './data/game.db'
+const SECRET_KEY = process.env.SECRET_KEY || config.secrets.secretKey
+const JWT_SECRET = process.env.JWT_SECRET || config.secrets.jwtSecret
+const DB_PATH = config.db.path
 mkdirSync(dirname(DB_PATH), { recursive: true })
 const db = new DatabaseSync(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL')
@@ -21,6 +21,21 @@ runMigrations(db)
 
 const app = express()
 app.use(express.raw({ type: '*/*', limit: '2mb' }))
+
+// DX-OBS: request metrics + DX-HEA: health endpoints
+app.use((req, res, next) => {
+  res.on('finish', () => httpRequests({ method: req.method, path: req.route?.path ?? req.path, status: String(res.statusCode) }))
+  next()
+})
+app.get('/health', (_req, res) => res.json(liveness()))
+app.get('/health/ready', (_req, res) => {
+  const r = readiness()
+  res.status(r.status === 'ready' ? 200 : 503).json(r)
+})
+app.get('/metrics', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4')
+  res.send(renderMetrics())
+})
 
 function verifySign(body: string, sign: string, ts: number): boolean {
   if (!sign || !ts) return false
@@ -149,5 +164,8 @@ app.post('/api/client/init', (_req, res) => {
   })
 })
 
-const port = Number(process.env.PORT || 8080)
-app.listen(port, () => log.info(`HTTP listening on ${port}`))
+const port = config.http.port
+app.listen(port, config.http.host, () => {
+  health.httpListening = true
+  log.info(`HTTP listening on ${config.http.host}:${port}`)
+})

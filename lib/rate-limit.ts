@@ -37,4 +37,7 @@ export const RL = {
   TCP_FIGHT_RESULT:  { max: 5,  windowSec: 1 },
   TCP_GLOBAL:        { max: 30, windowSec: 1 },
   TCP_GM:            { max: 1,  windowSec: 1 },
+  TCP_BATTLE:        { max: 60, windowSec: 60 },
+  TCP_CHAT:          { max: 30, windowSec: 60 },
+  TCP_PAY:           { max: 5,  windowSec: 3600 },
 }

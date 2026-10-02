@@ -197,76 +197,94 @@ object-wrapped form is the canonical one:
 
 ---
 
-## 6. TCP API (binary protocol)
+## 6. TCP API (DeepCore/Pomelo binary protocol)
 
-The Unity client uses `DeepCore.FuckPomelo` with `OpenCards.Core.Protocol.*`
-DTOs that are auto-generated from server `.proto` files. The on-wire frame
-matches that:
+> **Rewritten 2026-10-02** after decompiling the client's `DeepCore.dll` (ILSpy) and
+> regenerating the protocol registry from the client's real Lua corpus
+> (`Assets/GameAssets/lua/Protocol/generated/*.lua`, 1215 protocols). The previous
+> hand-written registry had invented MessageIDs and a wrong wire format — it is gone.
+> Full protocol table: **docs/protocols.md** (auto-generated, 425 requests).
 
-```
-[ MessageID   u32 BE ]   ← matches Protocol.Serializer[0xXXXXXXXX]
-[ Length      u32 BE ]   ← payload length in bytes
-[ Payload     bytes  ]   ← fields encoded in registration order
-```
-
-### Field encoding
-
-| Kind | Wire format | Notes |
-|---|---|---|
-| `S32`  | 4 bytes BE int32 | signed 32-bit |
-| `VS32` | zigzag varint | matches Lua's `output.stream:PutVS32` |
-| `UTF`  | `VS32(len) + UTF-8 bytes` | no BOM, no NUL terminator |
-| `Bool` | 1 byte (`0`/`1`) | |
-| `OBJ`  | nested DTO via typeid dispatch | (not used by current handlers — see §11) |
-
-### Handshake (must work before any other protocol)
+### Frame format (verified against `DeepCore.FuckPomelo`)
 
 ```
-0x00032001 ClientEnterServerRequest (c→s)
-  c2s_accountUUID  UTF
-  c2s_token        UTF    ← JWT issued by /account/login
-  c2s_debug        Bool
-  c2s_sessionId    S32
-→ 0x00032002 ClientEnterServerResponse (s→c)
-  s2c_sessionId    S32
-
-0x00033001 ClientEnterGameRequest (c→s) — 14 fields
-  c2s_accountUUID, c2s_serverID, c2s_LanguageID, c2s_DeviceID,
-  c2s_Os, c2s_OsVersion, c2s_AppVersion, c2s_ZoneOffset,
-  c2s_Channel, c2s_AFID, c2s_UseSource, c2s_Address,
-  c2s_ClientVersion, c2s_BundleID
-→ 0x00033002 ClientEnterGameResponse (s→c) — 7 fields
-  s2c_UserSource, s2c_newRole, s2c_waitingCount,
-  s2c_battleRecordURLPrefix, s2c_accumulativeLoginDays,
-  s2c_serverId, s2c_createRoleClientVersion
+[ byte0: pkgType | mask<<4 ]   pkgType: 1=HANDSHAKE 2=HANDSHAKE_ACK 3=HEARTBEAT 4=MESSAGE 5=KICK
+[ bytes1-3: length LE 24-bit ]  bytes after the 4-byte head
+[ body ]                        PKG_MESSAGE body:
+                                  [ msgType u8 ]  0=NOTIFY 1=REQUEST_C2S 2=RESPONSE_S2C
+                                  [ sendId u32 LE ]  (omitted for NOTIFY)
+                                  [ route s32 LE ]   = protocol MessageID
+                                  [ payload ]        = flattened protocol fields
 ```
 
-### Implemented handlers (live-tested)
+Connection flow: client `Connect()` sends **PKG_HANDSHAKE** whose user OBJ is a
+`ClientEnterServerRequest` (0x00032001). Server validates the JWT against the
+`sessions` table and replies **PKG_HANDSHAKE_ACK** with token OBJ =
+`ClientEnterServerResponse` (0x00032002, carries `s2c_code`/`s2c_sessionId`) +
+`remote_info` UTF + `heartbeat_interval_ms` VS32. After that all traffic is
+PKG_MESSAGE request/response pairs correlated by `sendId`; responses always use
+route = **Response** MessageID (Request+1 by corpus convention, 420/431 pairs).
+PKG_HEARTBEAT frames are echoed. Auth failure -> PKG_KICK + close.
+
+### Field encoding (DeepCore.IO.OutputStream, USE_VLQ=false)
+
+| Kind | Wire format |
+|---|---|
+| `Bool` / `U8` / `Enum8` | 1 byte |
+| `S16` | 2 bytes **LE** |
+| `S32` / `VS32` / `Enum32` | 4 bytes **LE** (VLQ disabled on the Lua path) |
+| `S64` / `VS64` | 8 bytes **LE** |
+| `F32` / `F64` | IEEE754 **LE** |
+| `UTF` | `S16 charCount` + **UTF-16LE** bytes; -1 = null, 0 = empty |
+| `DateTime` | S64 (.NET `DateTime.ToBinary()`) |
+| `TimeSpan` | U64 total-ms |
+| `Bytes` | `S32 len` + raw; -1 = null |
+| `OBJ` | `S32 messageID` + nested fields; -1 = null |
+| `LIST` / `ARRAY` | `S32 count` + elements; -1 = null |
+| `MAP` | `S32 count` + (key, value) pairs; -1 = null |
+
+Every Response payload starts with the inherited base fields:
+`s2c_code S32, s2c_msg UTF, InnerResponse OBJ, s2c_notifys LIST(Notify)`.
+Every Request whose parent is `ClientRequest` starts with `c2s_requestId S32`.
+
+### Implemented handlers (live-tested, real MessageIDs)
 
 | MessageID | Name | Behavior |
 |---|---|---|
-| `0x00032001` | `ClientEnterServerRequest` | Validates JWT against `sessions` table; returns `s2c_sessionId` |
-| `0x00033001` | `ClientEnterGameRequest` | Loads role by `account_uuid`, binds session |
-| `0x0003300F` | `ClientExitGameRequest` | Deletes session |
-| `0x00050201` | `ClientGetRoleInfoRequest` | Returns role row |
-| `0x00050403` | `ClientChangeRoleNameRequest` | Updates `roles.name`, returns ack |
-| `0x00033301` | `ClientQueryBagHeroRequest` | Returns heroes list |
-| `0x0003340x` | `ClientGetFormationInfoRequest` | Returns formations list |
-| `0x00035002` | `ClientBatchRequest` | Returns ack (real batching is §11 follow-up) |
-| anything else | | Echoes back the same MessageID with empty payload — **so the client never sees "unknown protocol"** while the backend is stubbed |
+| handshake | `ClientEnterServerRequest` (in PKG_HANDSHAKE) | JWT check vs `sessions`; ACK carries EnterServerResponse |
+| `0x00033001` | `ClientEnterGameRequest` | loads/creates role, binds session |
+| `0x0003300F` | `ClientExitGameRequest` | clears role binding |
+| `0x00033013` | `ClientPing` | ack |
+| `0x00035201` | `ClientFightRandomSeedRequest` | `battle-arbitrator.IssueSeed` -> DB `battle_seeds` (5-min TTL) |
+| `0x00035203` | `ClientFightResultRequest` | `resolveBot`: seed match + power-drift (5%) + replay guard; drop-table rewards via `dispatchRewards`; pushes `ClientCommonNotify` (0x00035001) |
+| `0x00035209` | `ClientFightSkipResultRequest` | sweep settle |
+| `0x00035701` | `ClientGetFormationInfoRequest` | formations from DB |
+| `0x66BE7DAB` | `ClientQueryBagHeroRequest` | hero bag |
+| `0x00035906` | `ClientLoadGuildRequest` | guild-engine |
+| `0x00037901` | `ClientEnterMazeRequest` | maze-engine layout |
+| `0x00036304/06` | `ClientStartCopyRequest`/`ClientEndCopyRequest` | rogue-engine |
+| `0x00036501/03/05` | `PlaceOrder`/`CheckOrder`/`SyncOrder` | pay.ts order state machine |
+| `0x00035301` | `ClientHandleGMRequest` | gm-admin (admin-token gated) |
+| `0x00038301/03` | `ClientChatMessageList`/`ClientChatAddMessage` | chat-engine + forbidden words + mute + rate limit |
+| `0x00050201` | `ClientGetRoleInfoRequest` | role info DTO |
+| `0x00050403` | `ClientChangeRoleNameRequest` | rename |
+| *any other request* | | schema-derived default response (`s2c_code=200` + zero-values) — client never hangs on an unknown protocol |
 
-### Verified roundtrip
+Cross-cutting: per-role rate limiting (`rate-limit.ts`, 120 msg/min global +
+per-domain caps), metrics counters, structured logs to stdout + `logs/server-YYYY-MM-DD.log`.
+
+### Verified roundtrip (tests/e2e_client.py — real protocol, real sockets)
 
 ```
-c→s 0x00032001 EnterServer  → s→c 0x00032002 { s2c_sessionId: <N> }        ✅
-c→s 0x00033001 EnterGame    → s→c 0x00033002 { 7 fields, 52 bytes }       ✅
-c→s 0x00033301 QueryBagHero → s→c 0x00033301 { empty payload }            ✅
-c→s 0x00050403 ChangeName   → s→c 0x00050414 { ack byte }                 ✅
+HTTP /account/login            -> JWT + sessionId                       16/16 PASS
+PKG_HANDSHAKE(user=EnterServer)-> PKG_HANDSHAKE_ACK(token=EnterServerResponse, hb=15000ms)
+EnterGame 0x33001              -> 0x33002 { s2c_code=200, ... }
+FightRandomSeed 0x35201        -> 0x35202 { RandomUuid, RandomSeed, DifficultyRank, ... }
+FightResult 0x35203 (win)      -> 0x35204 { s2c_code=200 } + ClientCommonNotify push (rewards applied to DB)
+PKG_HEARTBEAT                  -> echoed
 ```
 
----
-
-## 7. Database schema (12 tables)
+## 7. Database schema (26 tables after migrations 001-013)
 
 See `db/migrations/001_init.sql` for the full DDL. Summary:
 
@@ -416,21 +434,25 @@ node --import tsx services\http\src\main.ts > logs\http.log 2>&1
 
 ## 11. Known gaps (follow-ups)
 
-These are intentional — the spec called for a **complete backend that
-supports client functionality** at the protocol level, not a full game logic
-implementation. The remaining work is real-game-domain code, not API surface:
+Updated after the 2026-10-02 protocol-rebuild pass. Fixed since the last revision:
+~~echo stubs~~ (now schema-default responses with correct wire types), ~~no push~~
+(push-scheduler + ClientCommonNotify live), ~~no nested DTOs~~ (codec supports
+OBJ/LIST/ARRAY/MAP with the full 1215-protocol registry), ~~no rate limiting~~
+(token bucket wired into TCP dispatch), ~~stdout-only logging~~ (daily-rotated
+file logs), ~~no metrics/health~~ (/metrics + /health + /health/ready),
+~~no admin CLI~~ (`bin/admin.ts`: accounts/roles/orders/give/mute/gmlog/pushlog/seeds/migrate/health),
+~~arena/tower/dungeon/guild/sign-in handlers~~ (wired at real corpus MessageIDs, E2E 27/27).
 
 | Gap | Why it exists | Where to add it |
 |---|---|---|
-| **423 of 430 protocols are echo stubs** | They answer `200` so the client never sees "unknown protocol", but they don't implement the business logic (battle resolution, ranking, rewards, etc.) | Add handlers in `services/tcp/src/main.ts:handlers` Map |
-| **Push / Notify subscription** | The registry defines IDs; the server never initiates a push to the client | Add a `pushToClient(sock, mid, payload)` helper + scheduler |
+| **QueryBagHero `s2c_heros` nested map** | MAP<S32, MAP<UTF, BagHeroData>> shape needs BagHeroData DTO field mapping | `services/tcp/src/main.ts` QUERY_BAG_HERO_REQ handler |
+| **EnterMaze `s2c_mazeData`** | MazeData ORM DTO mapping pending (layout computed server-side) | ENTER_MAZE_REQ handler |
 | **`ClientBatchRequest` real batch** | Returns ack; the Lua client uses this for first-screen bulk loading | Implement parallel dispatch of inner requests |
-| **`OpenCards.Core.Data.*` nested DTOs** | The codec currently supports S32/VS32/UTF/Bool; nested DTOs use `PutOBJ`/`GetOBJ` in the client. No handler currently emits those | Add `OBJ` kind to codec.ts and register nested DTO definitions |
 | **TLS** | HTTP listens on plain `http://`; client uses `http://` for `serverlist.json` too | Add `https.createServer({key, cert}, app)` for prod |
-| **Rate limiting** | None | Add `express-rate-limit` or Nginx upstream |
-| **Logging to file** | Only stdout; not structured for production | Wrap pino with pino/file transport |
+| **Compression** | Client factory never compresses (`CompressStream` -> false); mask bit handled but unused | Leave as-is unless client changes |
 
 ---
+
 
 ## 12. Reference: companion design doc
 
