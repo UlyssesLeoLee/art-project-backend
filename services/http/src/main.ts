@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { pino } from 'pino'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { runMigrations } from '../../../db/migrations/run.js'
 
 const log = pino()
 const SECRET_KEY = process.env.SECRET_KEY || '3dbf6b137a80d10953507929a0216d8b'
@@ -14,7 +15,9 @@ const DB_PATH = process.env.DB_PATH || './data/game.db'
 mkdirSync(dirname(DB_PATH), { recursive: true })
 const db = new DatabaseSync(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL')
-db.exec(readFileSync('./db/migrations/001_init.sql', 'utf8'))
+// Apply any pending migrations first (idempotent). For initial fresh DB, this also runs 001_init.sql
+// (since the schema file is the very first migration to apply).
+runMigrations(db)
 
 const app = express()
 app.use(express.raw({ type: '*/*', limit: '2mb' }))

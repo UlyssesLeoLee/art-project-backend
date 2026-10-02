@@ -100,6 +100,23 @@ For production, override `SECRET_KEY`, `JWT_SECRET`, `CDN_URL`, and `GAME_HOST`
 to real values. The `setup.bat` and Scheduled-Task scripts set `DB_PATH` for
 you via `setx DB_PATH`.
 
+### Migrations
+
+Migrations live in `db/migrations/` and apply automatically at service boot
+(both HTTP and TCP). Idempotent — already-applied migrations are skipped.
+
+| File | Purpose |
+|---|---|
+| `_migrations.sql` | Version table (created first) |
+| `001_init.sql` | Original schema (12 tables) |
+| `002_hotpath_indexes.sql` | `idx_sessions_token`, `idx_accounts_platform_account`, `idx_orders_role_status`, `idx_heroes_role_hero` |
+| `run.ts` | Runner: scans, applies pending migrations, records to `_migrations` |
+
+CLI form: `node --import tsx db/migrations/run.ts`
+
+New migrations: drop a `NNN_name.sql` into `db/migrations/`; runner picks it up
+next boot. Filenames must start with 3+ digits.
+
 ---
 
 ## 5. HTTP API

@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { BinaryReader, BinaryWriter, getRequest } from '../../../shared/proto/codec.js'
+import { runMigrations } from '../../../db/migrations/run.js'
 import '../../../shared/proto/registry.js'
 
 const log = pino()
@@ -11,7 +12,8 @@ const DB_PATH = process.env.DB_PATH || './data/game.db'
 mkdirSync(dirname(DB_PATH), { recursive: true })
 const db = new DatabaseSync(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL')
-db.exec(readFileSync('./db/migrations/001_init.sql', 'utf8'))
+// Apply any pending migrations first (idempotent).
+runMigrations(db)
 
 interface Session { uuid: string; roleUuid: string; sessionId: number }
 const sessions = new Map<Socket, Session>()
