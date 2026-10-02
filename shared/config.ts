@@ -14,6 +14,8 @@ export interface AppConfig {
   game: { serverId: string; cdnUrl: string; heartbeatMs: number; battleRecordUrlPrefix: string }
   pay: { notifyUrl: string; quickAppKey: string; tianjiAppKey: string; ymnAppKey: string }
   log: { level: string; dir: string; maxFiles: number }
+  tls: { enabled: boolean; cert: string; key: string }
+  cors: { origins: string[] }
 }
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -63,6 +65,15 @@ export function loadConfig(): AppConfig {
       ymnAppKey: parsed.pay?.ymnAppKey ?? '',
     },
     log: { level: parsed.log?.level ?? 'info', dir: parsed.log?.dir ?? './logs', maxFiles: Number(parsed.log?.maxFiles ?? 14) },
+    tls: {
+      enabled: process.env.TLS_ENABLED === 'true' ? true : Boolean(parsed.tls?.enabled ?? false),
+      cert: process.env.TLS_CERT_PATH ?? parsed.tls?.cert ?? '',
+      key: process.env.TLS_KEY_PATH ?? parsed.tls?.key ?? '',
+    },
+    cors: {
+      origins: (process.env.CORS_ORIGINS ?? (Array.isArray(parsed.cors?.origins) ? parsed.cors.origins.join(',') : (parsed.cors?.origins as unknown as string) ?? '*'))
+        .split(',').map((s: string) => s.trim()).filter(Boolean),
+    },
   }
   return cached
 }
