@@ -41,6 +41,14 @@ jobs:
         env:
           DB_PATH: ':memory:'
 
+      - name: HTTP API tests
+        run: PORT=18889 APP_ENV=dev DB_PATH=':memory:' node --import tsx tests/http-api.test.ts
+
+      - name: Admin CLI tests
+        run: APP_ENV=dev DB_PATH=./data/ci-admin.db node --import tsx tests/admin-cli.test.ts
+        env:
+          DB_PATH: ':memory:'
+
       - name: Boot servers + E2E
         run: |
           node --import tsx services/http/src/main.ts &

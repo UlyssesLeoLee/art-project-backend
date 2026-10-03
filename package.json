@@ -18,7 +18,11 @@
     "lint": "eslint . --ext .ts",
     "db:migrate": "node --import tsx db/migrations/run.ts",
     "test:e2e": "python tests/e2e_client.py",
-    "db:seed": "node --import tsx db/seeds/seed.ts"
+    "db:seed": "node --import tsx db/seeds/seed.ts",
+    "test:smoke": "node --import tsx tests/smoke.ts",
+    "test:http": "node --import tsx tests/http-api.test.ts",
+    "test:admin": "node --import tsx tests/admin-cli.test.ts",
+    "test:all": "npm run test:smoke && npm run test:http && npm run test:admin && npm run test:e2e"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
