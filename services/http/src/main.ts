@@ -16,7 +16,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { runMigrations } from '../../../db/migrations/run.js'
 import { config } from '../../../shared/config.js'
-import { log, health, liveness, readiness, renderMetrics, httpRequests } from '../../../shared/obs.js'
+import { log, health, liveness, readiness, renderMetrics, httpRequests, attachMetricsDb } from '../../../shared/obs.js'
 import { checkRateLimit, RL } from '../../../lib/rate-limit.js'
 import { LoginBody, BindBody, RegisterBody, ActivationBody, parseBody } from '../../../shared/validation.js'
 
@@ -26,6 +26,7 @@ const DB_PATH = config.db.path
 mkdirSync(dirname(DB_PATH), { recursive: true })
 const db = new DatabaseSync(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL')
+attachMetricsDb(db)
 // Apply any pending migrations first (idempotent). For initial fresh DB, this also runs 001_init.sql
 // (since the schema file is the very first migration to apply).
 runMigrations(db)

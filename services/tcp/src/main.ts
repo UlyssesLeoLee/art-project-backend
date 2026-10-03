@@ -18,7 +18,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { config } from '../../../shared/config.js'
-import { log, health, tcpMessages, tcpConnections } from '../../../shared/obs.js'
+import { log, health, liveness, readiness, renderMetrics, httpRequests, tcpMessages, tcpConnections, attachMetricsDb } from '../../../shared/obs.js'
 import { startPushScheduler, setBroadcaster } from '../../../lib/push-scheduler.js'
 import {
   PackageType, MessageType, NULL_MESSAGE_CODE,
@@ -47,6 +47,7 @@ const DB_PATH = config.db.path
 mkdirSync(dirname(DB_PATH), { recursive: true })
 const db = new DatabaseSync(DB_PATH)
 db.exec('PRAGMA journal_mode = WAL')
+attachMetricsDb(db)
 try {
   runMigrations(db)
 } catch (e: any) {
